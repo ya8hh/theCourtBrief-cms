@@ -1,0 +1,120 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "headline",
+    "subtitle",
+    "summary",
+    "articleBody",
+    "caseTitle",
+    "caseNumber",
+    "judgmentDate",
+    "bench",
+    "finalOutcome",
+    "seoTitle",
+    "seoDescription",
+    "documentType",
+    "judges",
+    "legalIssues",
+    "legalTopics",
+    "statutoryProvisions",
+    "keyHoldings",
+    "importantParagraphReferences",
+    "uncertainties",
+    "verificationChecklist"
+  ],
+  "properties": {
+    "headline": {
+      "type": ["string", "null"]
+    },
+    "subtitle": {
+      "type": ["string", "null"]
+    },
+    "summary": {
+      "type": ["string", "null"]
+    },
+    "articleBody": {
+      "type": ["string", "null"]
+    },
+    "caseTitle": {
+      "type": ["string", "null"]
+    },
+    "caseNumber": {
+      "type": ["string", "null"]
+    },
+    "judgmentDate": {
+      "type": ["string", "null"]
+    },
+    "bench": {
+      "type": ["string", "null"]
+    },
+    "finalOutcome": {
+      "type": ["string", "null"]
+    },
+    "seoTitle": {
+      "type": ["string", "null"]
+    },
+    "seoDescription": {
+      "type": ["string", "null"]
+    },
+    "documentType": {
+      "type": ["string", "null"],
+      "enum": [
+        "Judgment",
+        "Daily Order",
+        "Interim Order",
+        "Notice",
+        "Other",
+        null
+      ]
+    },
+    "judges": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "legalIssues": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "legalTopics": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "statutoryProvisions": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "keyHoldings": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "importantParagraphReferences": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "uncertainties": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "verificationChecklist": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

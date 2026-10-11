@@ -1,0 +1,178 @@
+{
+  "kind": "collectionType",
+  "collectionName": "case_articles",
+  "info": {
+    "singularName": "case-article",
+    "pluralName": "case-articles",
+    "displayName": "Case Article"
+  },
+  "options": {
+    "draftAndPublish": true
+  },
+  "attributes": {
+    "headline": {
+      "type": "string",
+      "required": true,
+      "maxLength": 240
+    },
+    "slug": {
+      "type": "uid",
+      "targetField": "headline",
+      "required": true
+    },
+    "subtitle": {
+      "type": "string"
+    },
+    "summary": {
+      "type": "text",
+      "required": true
+    },
+    "articleBody": {
+      "type": "richtext",
+      "required": true
+    },
+    "documentType": {
+      "type": "enumeration",
+      "enum": ["Judgment", "Daily Order", "Interim Order", "Notice", "Other"],
+      "required": true,
+      "default": "Judgment"
+    },
+    "category": {
+      "type": "enumeration",
+      "enum": [
+        "Constitutional Law",
+        "Civil Law",
+        "Criminal Law",
+        "Commercial Law",
+        "Public Interest",
+        "Other"
+      ],
+      "default": "Other",
+      "required": true
+    },
+    "caseTitle": {
+      "type": "string"
+    },
+    "caseNumber": {
+      "type": "string"
+    },
+    "diaryNumber": {
+      "type": "string"
+    },
+    "judgmentDate": {
+      "type": "date"
+    },
+    "bench": {
+      "type": "string"
+    },
+    "judges": {
+      "type": "json"
+    },
+    "legalIssues": {
+      "type": "json"
+    },
+    "legalTopics": {
+      "type": "json"
+    },
+    "statutoryProvisions": {
+      "type": "json"
+    },
+    "keyHoldings": {
+      "type": "json"
+    },
+    "finalOutcome": {
+      "type": "text"
+    },
+    "importantParagraphReferences": {
+      "type": "json"
+    },
+    "officialSourceUrl": {
+      "type": "string",
+      "required": true
+    },
+    "originalPdf": {
+      "type": "media",
+      "multiple": false,
+      "allowedTypes": ["files"]
+    },
+    "pdfUnavailableReason": {
+      "type": "text"
+    },
+    "sourceDocument": {
+      "type": "relation",
+      "relation": "manyToOne",
+      "target": "api::source-document.source-document",
+      "inversedBy": "articles",
+      "private": true
+    },
+    "editorialNotes": {
+      "type": "text",
+      "private": true
+    },
+    "reviewStatus": {
+      "type": "enumeration",
+      "enum": ["draft", "review", "approved"],
+      "default": "draft",
+      "required": true,
+      "private": true
+    },
+    "author": {
+      "type": "string",
+      "required": true
+    },
+    "seoTitle": {
+      "type": "string",
+      "maxLength": 120
+    },
+    "seoDescription": {
+      "type": "text",
+      "maxLength": 300
+    },
+    "approvedBy": {
+      "type": "string",
+      "private": true
+    },
+    "approvedOn": {
+      "type": "datetime",
+      "private": true
+    },
+    "publishedBy": {
+      "type": "string",
+      "private": true
+    },
+    "aiModel": {
+      "type": "string",
+      "private": true
+    },
+    "promptVersion": {
+      "type": "string",
+      "private": true
+    },
+    "uncertainties": {
+      "type": "json",
+      "private": true
+    },
+    "verificationChecklist": {
+      "type": "json",
+      "private": true
+    },
+    "accuracyWarnings": {
+      "type": "json",
+      "private": true
+    },
+    "workflowState": {
+      "type": "enumeration",
+      "enum": ["draft", "review", "approved", "published"],
+      "default": "draft",
+      "private": true
+    },
+    "sourceSearchText": {
+      "type": "text",
+      "private": true
+    },
+    "pdfRetiredAt": {
+      "type": "datetime",
+      "private": true
+    }
+  }
+}

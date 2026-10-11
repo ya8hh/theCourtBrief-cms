@@ -1,0 +1,125 @@
+{
+  "kind": "collectionType",
+  "collectionName": "source_documents",
+  "info": {
+    "singularName": "source-document",
+    "pluralName": "source-documents",
+    "displayName": "Source Document"
+  },
+  "options": {
+    "draftAndPublish": false
+  },
+  "attributes": {
+    "title": {
+      "type": "string",
+      "required": true
+    },
+    "documentType": {
+      "type": "enumeration",
+      "enum": ["Judgment", "Daily Order", "Interim Order", "Notice", "Other"],
+      "default": "Other"
+    },
+    "originalPdf": {
+      "type": "media",
+      "multiple": false,
+      "allowedTypes": ["files"]
+    },
+    "officialSourceUrl": {
+      "type": "string",
+      "required": true
+    },
+    "documentSha256": {
+      "type": "string",
+      "unique": true,
+      "regex": "^[a-f0-9]{64}$"
+    },
+    "caseTitle": {
+      "type": "string"
+    },
+    "caseNumber": {
+      "type": "string"
+    },
+    "judgmentDate": {
+      "type": "date"
+    },
+    "originalFilename": {
+      "type": "string"
+    },
+    "extractedText": {
+      "type": "text",
+      "private": true
+    },
+    "pageCount": {
+      "type": "integer",
+      "min": 1
+    },
+    "ocrRequired": {
+      "type": "boolean",
+      "default": false
+    },
+    "processingStatus": {
+      "type": "enumeration",
+      "enum": [
+        "uploaded",
+        "extracting",
+        "ocr_required",
+        "generating",
+        "ready_for_review",
+        "failed",
+        "published"
+      ],
+      "default": "uploaded"
+    },
+    "processingError": {
+      "type": "text",
+      "private": true
+    },
+    "aiModel": {
+      "type": "string",
+      "private": true
+    },
+    "promptVersion": {
+      "type": "string",
+      "private": true
+    },
+    "editorialNotes": {
+      "type": "text",
+      "private": true
+    },
+    "allowMultipleArticles": {
+      "type": "boolean",
+      "default": false,
+      "private": true
+    },
+    "articles": {
+      "type": "relation",
+      "relation": "oneToMany",
+      "target": "api::case-article.case-article",
+      "mappedBy": "sourceDocument",
+      "private": true
+    },
+    "extractionMetadata": {
+      "type": "json",
+      "private": true
+    },
+    "uploadedBy": {
+      "type": "string",
+      "private": true
+    },
+    "textReviewed": {
+      "type": "boolean",
+      "default": false,
+      "private": true
+    },
+    "diaryNumber": {
+      "type": "string"
+    },
+    "bench": {
+      "type": "string"
+    },
+    "pdfRetiredAt": {
+      "type": "datetime",
+      "private": true
+    }
+  }
+}
