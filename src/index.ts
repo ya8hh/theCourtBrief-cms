@@ -77,7 +77,7 @@ export default {
               (await strapi.db
                 .connection("processing_jobs")
                 .where("source_id", params.documentId)
-                .whereIn("state", ["queued", "running"])
+                .whereIn("state", ["queued", "running", "waiting"])
                 .first())
             )
               throw new errors.ValidationError(

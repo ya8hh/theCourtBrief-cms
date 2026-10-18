@@ -16,13 +16,21 @@
     },
     "documentType": {
       "type": "enumeration",
-      "enum": ["Judgment", "Daily Order", "Interim Order", "Notice", "Other"],
+      "enum": [
+        "Judgment",
+        "Daily Order",
+        "Interim Order",
+        "Notice",
+        "Other"
+      ],
       "default": "Other"
     },
     "originalPdf": {
       "type": "media",
       "multiple": false,
-      "allowedTypes": ["files"]
+      "allowedTypes": [
+        "files"
+      ]
     },
     "officialSourceUrl": {
       "type": "string",
@@ -66,7 +74,8 @@
         "generating",
         "ready_for_review",
         "failed",
-        "published"
+        "published",
+        "waiting"
       ],
       "default": "uploaded"
     },

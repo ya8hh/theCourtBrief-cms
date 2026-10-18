@@ -2,10 +2,10 @@
 import os, time, socket, json, threading
 from pathlib import Path
 import httpx
-from processor import extract_isolated, generate
+from processor import extract_isolated, generate, RateLimitWait
 
 def run_once(client):
-    response=client.post('/api/worker/claim',json={'worker':socket.gethostname()})
+    response=client.post('/api/worker/claim',json={'worker':socket.gethostname(),'protocol':2})
     response.raise_for_status()
     job=response.json().get('data')
     if not job:return False
@@ -26,10 +26,28 @@ def run_once(client):
             result=extract_isolated(pdf.content)
             if result['sha256']!=job['checksum']:raise ValueError('Stored PDF checksum does not match source record.')
         else:
-            result=generate(job['extraction'],job['metadata'],job['payload'].get('instruction',''),job['payload'].get('prior'))
+            def save_checkpoint(state):
+                saved=client.post(f'/api/worker/jobs/{ident}/checkpoint',json={'lease':lease,'checkpoint':state})
+                saved.raise_for_status()
+            def credentials_loader():
+                config=client.get('/api/worker/config')
+                config.raise_for_status()
+                return config.json()['data']
+            result=generate(job['extraction'],job['metadata'],job['payload'].get('instruction',''),job['payload'].get('prior'),
+                            checkpoint=job.get('checkpoint'),save_checkpoint=save_checkpoint,credentials_loader=credentials_loader)
         result_response=client.post(f'/api/worker/jobs/{ident}/complete',json={'lease':lease,'result':result})
         if result_response.is_error: raise ValueError("CMS rejected processing result: "+result_response.text[:1500])
+    except RateLimitWait as exc:
+        state=getattr(exc,'checkpoint',None)
+        if state is None:
+            raise
+        waiting=client.post(f'/api/worker/jobs/{ident}/defer',json={'lease':lease,'checkpoint':state,'retryAfter':exc.retry_after,'cooldowns':exc.cooldowns,'reason':exc.reason})
+        waiting.raise_for_status()
+        print(json.dumps({'jobWaiting':ident,'retryAfterSeconds':exc.retry_after,'progress':state.get('progress')}),flush=True)
     except Exception as exc:
+        if getattr(exc,'checkpoint',None):
+            saved=client.post(f'/api/worker/jobs/{ident}/checkpoint',json={'lease':lease,'checkpoint':exc.checkpoint})
+            saved.raise_for_status()
         failure=client.post(f'/api/worker/jobs/{ident}/complete',json={'lease':lease,'error':str(exc)[:1500],'usage':getattr(exc,'usage',None)})
         if failure.is_error: raise ValueError("CMS rejected failure report: "+failure.text[:1500])
     finally:

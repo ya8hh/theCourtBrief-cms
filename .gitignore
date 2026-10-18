@@ -25,3 +25,6 @@ processor/.venv/
 .vercel/
 public/uploads/*
 !public/uploads/.gitkeep
+
+*.tar.gz
+.local*

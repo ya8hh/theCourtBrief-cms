@@ -35,3 +35,8 @@ processor/.venv/bin/python -m pytest processor/tests -q
 Local worker reads this project's .env. Set CMS_URL to the CMS address, PROCESSOR_TOKEN to the identical secret on CMS and worker, AI_ENABLED=true and your LLM_BASE_URL/LLM_MODEL/LLM_API_KEY for AI generation. OCR is optional; native OCR needs Tesseract. Do not commit the key.
 
 For a separate hosted worker, use this repository root as build context and processor/Dockerfile. The worker needs no public port. Give it its own environment variables. PDFs are private until publication; cleanup then removes stored PDF bytes while retaining extracted text and official-source links.
+
+
+## Saved progress and AI-provider management
+
+See `DEPLOY-RESUMABLE-AI.md` for the coordinated CMS/editorial/worker upgrade. Super administrators can add multiple encrypted keys per provider at /editorial/settings. Long jobs save analysis and automatically resume after quota waits. The worker must be updated once before web-managed keys take effect.

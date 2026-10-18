@@ -5,31 +5,25 @@ export async function purgePublishedPdfs(strapi: Core.Strapi) {
   if (cleaning) return;
   cleaning = true;
   try {
-    const rows: any[] = await strapi
-      .documents(ARTICLE)
-      .findMany({
-        status: "published",
-        populate: ["originalPdf"],
-        filters: { originalPdf: { id: { $notNull: true } } },
-        limit: 100,
-      } as any);
+    const rows: any[] = await strapi.documents(ARTICLE).findMany({
+      status: "published",
+      populate: ["originalPdf"],
+      filters: { originalPdf: { id: { $notNull: true } } },
+      limit: 100,
+    } as any);
     for (const row of rows) {
       const file = row.originalPdf;
-      const drafts: any[] = await strapi
-        .documents(ARTICLE)
-        .findMany({
-          status: "draft",
-          filters: { originalPdf: { id: file.id } },
-          populate: ["sourceDocument"],
-          limit: 100,
-        } as any);
-      const published: any[] = await strapi
-        .documents(ARTICLE)
-        .findMany({
-          status: "published",
-          filters: { originalPdf: { id: file.id } },
-          limit: 100,
-        } as any);
+      const drafts: any[] = await strapi.documents(ARTICLE).findMany({
+        status: "draft",
+        filters: { originalPdf: { id: file.id } },
+        populate: ["sourceDocument"],
+        limit: 100,
+      } as any);
+      const published: any[] = await strapi.documents(ARTICLE).findMany({
+        status: "published",
+        filters: { originalPdf: { id: file.id } },
+        limit: 100,
+      } as any);
       if (
         drafts.some(
           (d) => !published.some((p) => p.documentId === d.documentId),
@@ -47,30 +41,26 @@ export async function purgePublishedPdfs(strapi: Core.Strapi) {
             "source_id",
             sources.map((s) => s.documentId),
           )
-          .whereIn("state", ["queued", "running"])
+          .whereIn("state", ["queued", "running", "waiting"])
           .first());
       if (active) continue;
       const stamp = new Date().toISOString();
       // Retain provenance and publication eligibility before removing media relations.
-      await strapi.db
-        .query(ARTICLE)
-        .updateMany({
-          where: { documentId: { $in: published.map((p) => p.documentId) } },
-          data: { pdfRetiredAt: stamp },
-        });
+      await strapi.db.query(ARTICLE).updateMany({
+        where: { documentId: { $in: published.map((p) => p.documentId) } },
+        data: { pdfRetiredAt: stamp },
+      });
       await strapi.plugin("upload").service("upload").remove(file);
       for (const source of sources)
         await strapi.db
           .query("api::source-document.source-document")
           .update({ where: { id: source.id }, data: { pdfRetiredAt: stamp } });
-      await strapi.db
-        .connection("editorial_audit_events")
-        .insert({
-          document_id: row.documentId,
-          action: "delete-temporary-pdf",
-          actor_id: "system",
-          occurred_at: new Date(),
-        });
+      await strapi.db.connection("editorial_audit_events").insert({
+        document_id: row.documentId,
+        action: "delete-temporary-pdf",
+        actor_id: "system",
+        occurred_at: new Date(),
+      });
     }
   } catch (error) {
     strapi.log.error(

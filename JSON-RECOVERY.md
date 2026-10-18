@@ -1,0 +1,7 @@
+# JSON generation recovery update
+
+Supersedes the prior key-failover worker update and retains paid-primary/free-backup handling. Adds the exact required article schema to the system prompt, includes it in the context/cost checks, and retries provider json_validate_failed once using JSON-object mode. The original schema is still validated locally; missing article fields are never accepted or silently filled. Source text and grounding checks are preserved. Other 400 errors are not retried and safe provider error codes are reported (no raw generated text or credentials). Failed generation usage is counted when supplied; missing usage remains unknown and reserves cost conservatively when a cap is configured. Actual requests remain bounded by the document budget.
+
+23 processor tests pass, including schema recovery, rejection of incomplete recovered output, bounded attempts, source preservation, token accounting, non-schema 400 errors, credential cooldown and failover, extraction and grounding checks. No live Groq generation or remote AWS deployment was performed.
+
+The user's 128-token generic diagnostic produced json_validate_failed but is not proof of the actual article job's cause. Install this worker update, retry the existing document's generation job, and inspect the new result. No PDF re-upload, key change, frontend deployment or CMS deployment is required. Archive excludes .env and all credentials.

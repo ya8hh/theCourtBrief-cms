@@ -1,3 +1,9 @@
+import {
+  credentialColumns,
+  credentialInput,
+  encryptCredential,
+  workerCredentialConfig,
+} from "./lib/ai-credentials";
 import { importOfficialPdf } from "./lib/import-pdf";
 import type { Core } from "@strapi/strapi";
 import { randomUUID, timingSafeEqual } from "node:crypto";
@@ -47,7 +53,7 @@ const pick = (data: any, keys: string[]) =>
 const decode = (row: any) => {
   if (!row) return row;
   const out = { ...row };
-  for (const key of ["payload", "result", "snapshot"])
+  for (const key of ["payload", "result", "snapshot", "checkpoint", "progress"])
     if (typeof out[key] === "string") out[key] = JSON.parse(out[key]);
   return out;
 };
@@ -101,6 +107,14 @@ export function registerEditorial(strapi: Core.Strapi) {
     ctx.set("Cache-Control", "no-store");
     return user;
   };
+  const requireKeyAdmin = (ctx: any) => {
+    if (
+      !ctx.state.user?.roles?.some((r: any) => r.code === "strapi-super-admin")
+    )
+      throw new errors.ForbiddenError(
+        "Only a CMS super administrator can manage AI credentials.",
+      );
+  };
   const current = async (ctx: any) => {
     const row = await article(ctx.params.id);
     if (!row) {
@@ -110,7 +124,13 @@ export function registerEditorial(strapi: Core.Strapi) {
       ctx.throw(409, "This draft changed. Reload before saving.");
     return row;
   };
-  const enqueue = async (s: any, kind: string, payload: any, user: any) => {
+  const enqueue = async (
+    s: any,
+    kind: string,
+    payload: any,
+    user: any,
+    checkpoint: any = null,
+  ) => {
     if (!["extract", "generate", "revise"].includes(kind))
       bad("Invalid job kind.");
     if (kind !== "extract" && (s.ocrRequired || !s.extractedText))
@@ -153,7 +173,7 @@ export function registerEditorial(strapi: Core.Strapi) {
         if (
           await trx("processing_jobs")
             .where("source_id", s.documentId)
-            .whereIn("state", ["queued", "running"])
+            .whereIn("state", ["queued", "running", "waiting"])
             .first()
         )
           bad("A source processing job is already queued or running.");
@@ -162,6 +182,7 @@ export function registerEditorial(strapi: Core.Strapi) {
           source_id: s.documentId,
           kind,
           state: "queued",
+          checkpoint: checkpoint ? JSON.stringify(checkpoint) : null,
           payload: JSON.stringify({ ...payload, checksum: s.documentSha256 }),
           requested_by: String(user.id),
           created_at: new Date(),
@@ -199,6 +220,92 @@ export function registerEditorial(strapi: Core.Strapi) {
   strapi.server.routes({
     type: "admin",
     routes: [
+      admin("GET", "/ai/settings", async (ctx) => {
+        requireKeyAdmin(ctx);
+        ctx.body = {
+          data: {
+            managed: Boolean(
+              (await db("ai_provider_settings").where({ id: 1 }).first())
+                ?.managed,
+            ),
+            credentials: await db("ai_provider_credentials")
+              .select(credentialColumns)
+              .orderBy("priority")
+              .orderBy("created_at"),
+          },
+        };
+      }),
+      admin("POST", "/ai/credentials", async (ctx) => {
+        requireKeyAdmin(ctx);
+        if (
+          Number(
+            (await db("ai_provider_credentials").count("* as n").first())?.n,
+          ) >= 50
+        )
+          bad("Keep at most 50 credentials; remove unused keys first.");
+        const { data, key } = credentialInput(ctx.request.body);
+        const id = randomUUID(),
+          now = new Date();
+        const encrypted = encryptCredential(key, id, data.provider);
+        await db.transaction(async (trx: any) => {
+          await trx("ai_provider_credentials").insert({
+            ...data,
+            id,
+            encrypted_key: encrypted,
+            key_hint: "••••" + key.slice(-4),
+            created_at: now,
+            updated_at: now,
+          });
+          await trx("ai_provider_settings")
+            .where({ id: 1 })
+            .update({ managed: true });
+          await trx("processing_jobs")
+            .where({ state: "waiting" })
+            .update({ next_run_at: now });
+          await audit(id, "ai-credential:add", ctx.state.user, trx);
+        });
+        ctx.body = { data: { id } };
+      }),
+      admin("POST", "/ai/credentials/:id", async (ctx) => {
+        requireKeyAdmin(ctx);
+        const row = await db("ai_provider_credentials")
+          .where({ id: ctx.params.id })
+          .first();
+        if (!row) ctx.throw(404);
+        const { data, key } = credentialInput(ctx.request.body, row);
+        const secret = key
+          ? {
+              encrypted_key: encryptCredential(key, row.id, row.provider),
+              key_hint: "••••" + key.slice(-4),
+              cooldown_until: null,
+            }
+          : {};
+        await db.transaction(async (trx: any) => {
+          await trx("ai_provider_credentials")
+            .where({ id: row.id })
+            .update({ ...data, ...secret, updated_at: new Date() });
+          await trx("processing_jobs")
+            .where({ state: "waiting" })
+            .update({ next_run_at: new Date() });
+          await audit(row.id, "ai-credential:update", ctx.state.user, trx);
+        });
+        ctx.body = { data: { ok: true } };
+      }),
+      admin("POST", "/ai/credentials/:id/delete", async (ctx) => {
+        requireKeyAdmin(ctx);
+        await db.transaction(async (trx: any) => {
+          await trx("ai_provider_credentials")
+            .where({ id: ctx.params.id })
+            .delete();
+          await audit(
+            ctx.params.id,
+            "ai-credential:delete",
+            ctx.state.user,
+            trx,
+          );
+        });
+        ctx.body = { data: { ok: true } };
+      }),
       admin("GET", "/config", async (ctx) => {
         ctx.body = {
           data: {
@@ -234,6 +341,8 @@ export function registerEditorial(strapi: Core.Strapi) {
               "attempts",
               "error",
               "result",
+              "progress",
+              "next_run_at",
               "article_id",
               "created_at",
               "updated_at",
@@ -261,7 +370,11 @@ export function registerEditorial(strapi: Core.Strapi) {
           data: {
             articles,
             sources,
-            jobs: jobs.map(decode),
+            jobs: jobs.map((row: any) => {
+              const safe = decode(row);
+              delete safe.checkpoint;
+              return safe;
+            }),
             events,
             counts: {
               published: publishedCount,
@@ -335,7 +448,11 @@ export function registerEditorial(strapi: Core.Strapi) {
                 .where("source_id", s.documentId)
                 .orderBy("created_at", "desc")
                 .limit(30)
-            ).map(decode),
+            ).map((row: any) => {
+              const safe = decode(row);
+              delete safe.checkpoint;
+              return safe;
+            }),
           },
         };
       }),
@@ -436,7 +553,15 @@ export function registerEditorial(strapi: Core.Strapi) {
         if (job.state !== "failed") bad("Only failed jobs can be retried.");
         const s = await source(job.source_id);
         ctx.body = {
-          data: { id: await enqueue(s, job.kind, job.payload, ctx.state.user) },
+          data: {
+            id: await enqueue(
+              s,
+              job.kind,
+              { ...job.payload, force: true },
+              ctx.state.user,
+              job.checkpoint,
+            ),
+          },
         };
       }),
       admin("POST", "/jobs/:id/apply", async (ctx) => {
@@ -545,7 +670,11 @@ export function registerEditorial(strapi: Core.Strapi) {
                 .where({ document_id: a.documentId })
                 .orderBy("created_at", "desc")
                 .limit(30)
-            ).map(decode),
+            ).map((row: any) => {
+              const safe = decode(row);
+              delete safe.checkpoint;
+              return safe;
+            }),
           },
         };
       }),
@@ -647,6 +776,19 @@ export function registerEditorial(strapi: Core.Strapi) {
     },
     config: { auth: false },
   });
+  const validateCheckpoint = (checkpoint: any) => {
+    if (
+      !checkpoint ||
+      checkpoint.version !== 1 ||
+      !/^[a-f0-9]{64}$/.test(checkpoint.fingerprint || "") ||
+      !checkpoint.entries ||
+      typeof checkpoint.entries !== "object" ||
+      Array.isArray(checkpoint.entries) ||
+      Buffer.byteLength(JSON.stringify(checkpoint)) > 8 * 1024 * 1024 ||
+      Object.keys(checkpoint.entries).length > 5000
+    )
+      bad("Invalid or oversized generation checkpoint.");
+  };
   const lease = async (ctx: any, trx: any = db) => {
     const j = await trx("processing_jobs")
       .where({
@@ -671,7 +813,7 @@ export function registerEditorial(strapi: Core.Strapi) {
           await trx("processing_jobs")
             .where("state", "running")
             .where("lease_until", "<", new Date())
-            .where("attempts", ">=", 3)
+            .where("lease_failures", ">=", 2)
             .update({
               state: "failed",
               error: "Worker lease expired after three attempts.",
@@ -683,11 +825,16 @@ export function registerEditorial(strapi: Core.Strapi) {
                 .where("state", "queued")
                 .orWhere((q: any) =>
                   q
+                    .where("state", "waiting")
+                    .where("next_run_at", "<=", new Date()),
+                )
+                .orWhere((q: any) =>
+                  q
                     .where("state", "running")
                     .where("lease_until", "<", new Date()),
                 ),
             )
-            .where("attempts", "<", 3)
+            .where("lease_failures", "<", 3)
             .orderBy("created_at")
             .forUpdate()
             .skipLocked()
@@ -695,6 +842,9 @@ export function registerEditorial(strapi: Core.Strapi) {
           if (!job) return;
           job = {
             ...job,
+            lease_failures:
+              Number(job.lease_failures || 0) +
+              (job.state === "running" ? 1 : 0),
             state: "running",
             attempts: job.attempts + 1,
             lease_token: randomUUID(),
@@ -706,6 +856,7 @@ export function registerEditorial(strapi: Core.Strapi) {
             .update(
               pick(job, [
                 "state",
+                "lease_failures",
                 "attempts",
                 "lease_token",
                 "lease_until",
@@ -727,6 +878,9 @@ export function registerEditorial(strapi: Core.Strapi) {
           } as any);
           job = {
             ...job,
+            ...(ctx.request.body?.protocol === 2
+              ? { aiConfig: await workerCredentialConfig(db) }
+              : {}),
             checksum: s.documentSha256,
             extraction: {
               text: s.extractedText,
@@ -747,11 +901,95 @@ export function registerEditorial(strapi: Core.Strapi) {
         }
         ctx.body = { data: job ?? null };
       }),
+      worker("GET", "/config", async (ctx) => {
+        ctx.body = { data: await workerCredentialConfig(db) };
+      }),
+      worker("POST", "/jobs/:id/checkpoint", async (ctx) => {
+        await db.transaction(async (trx: any) => {
+          await trx("processing_jobs")
+            .where({ id: ctx.params.id })
+            .forUpdate()
+            .first();
+          const j = await lease(ctx, trx),
+            b = ctx.request.body;
+          if (j.kind === "extract")
+            bad("Extraction does not accept generation checkpoints.");
+          validateCheckpoint(b.checkpoint);
+          await trx("processing_jobs")
+            .where({ id: j.id })
+            .update({
+              checkpoint: JSON.stringify(b.checkpoint),
+              progress: JSON.stringify(b.checkpoint.progress || {}),
+              updated_at: new Date(),
+            });
+        });
+        ctx.body = { data: { ok: true } };
+      }),
+      worker("POST", "/jobs/:id/defer", async (ctx) => {
+        await strapi.db.transaction(async ({ trx }) => {
+          await trx("processing_jobs")
+            .where({ id: ctx.params.id })
+            .forUpdate()
+            .first();
+          const j = await lease(ctx, trx),
+            b = ctx.request.body;
+          validateCheckpoint(b.checkpoint);
+          const seconds = Number(b.retryAfter);
+          if (!Number.isFinite(seconds) || seconds < 1 || seconds > 2678400)
+            bad("Invalid retry delay.");
+          const next = new Date(Date.now() + Math.ceil(seconds) * 1000);
+          for (const c of Array.isArray(b.cooldowns)
+            ? b.cooldowns.slice(0, 50)
+            : []) {
+            const until = Number(c.until);
+            if (
+              typeof c.id === "string" &&
+              Number.isFinite(until) &&
+              until > Date.now() / 1000 &&
+              until <= Date.now() / 1000 + 2678400
+            )
+              await trx("ai_provider_credentials")
+                .where({ id: c.id })
+                .update({ cooldown_until: new Date(until * 1000) });
+          }
+          const progress = {
+            ...(b.checkpoint.progress || {}),
+            waiting: true,
+            waitingReason:
+              b.reason === "no_credentials" ? "no_credentials" : "quota",
+            nextRunAt: next.toISOString(),
+          };
+          await trx("processing_jobs")
+            .where({ id: j.id })
+            .update({
+              state: "waiting",
+              checkpoint: JSON.stringify(b.checkpoint),
+              progress: JSON.stringify(progress),
+              next_run_at: next,
+              lease_token: null,
+              lease_until: null,
+              error: null,
+              updated_at: new Date(),
+            });
+          await strapi.documents(SOURCE).update({
+            documentId: j.source_id,
+            data: { processingStatus: "waiting", processingError: null },
+          } as any);
+          await audit(j.source_id, "processing:waiting-for-quota", null, trx);
+        });
+        ctx.body = { data: { ok: true } };
+      }),
       worker("POST", "/jobs/:id/heartbeat", async (ctx) => {
-        await lease(ctx);
-        await db("processing_jobs")
-          .where({ id: ctx.params.id, lease_token: ctx.request.body.lease })
-          .update({ lease_until: new Date(Date.now() + 300000) });
+        await db.transaction(async (trx: any) => {
+          await trx("processing_jobs")
+            .where({ id: ctx.params.id })
+            .forUpdate()
+            .first();
+          await lease(ctx, trx);
+          await trx("processing_jobs")
+            .where({ id: ctx.params.id })
+            .update({ lease_until: new Date(Date.now() + 300000) });
+        });
         ctx.body = { data: { ok: true } };
       }),
       worker("GET", "/jobs/:id/pdf", async (ctx) => {
