@@ -451,3 +451,72 @@ def test_rate_limit_log_also_names_requested_model(monkeypatch, capsys):
     rate = next(line for line in lines if line.get('providerRateLimited'))
     assert rate['provider'] == 'Groq primary'
     assert rate['model'] == 'openai/gpt-oss-120b'
+
+
+def test_compression_retries_oversized_model_response_without_dropping_input():
+    source = 'TEST ONLY material holding and qualification. ' * 100
+    class Verbose:
+        calls = []
+        def call(self, task, text, schema=None):
+            self.calls.append((task, text))
+            return {'notes': text} if len(self.calls) == 1 else {'notes': 'TEST ONLY dismissed, subject to qualification, page 12'}
+    provider = Verbose()
+    result = processor._compress_notes(provider, source)
+    assert len(provider.calls) == 2
+    assert all(text == source for _, text in provider.calls)
+    assert 'HARD SIZE LIMIT' in provider.calls[1][0]
+    assert 'qualification' in result and 'page 12' in result
+    assert len(result.encode()) <= len(source.encode()) * 3 // 5
+
+
+def test_compression_stubborn_model_is_bounded_and_never_truncates():
+    class Stubborn:
+        calls = 0
+        def call(self, task, source, schema=None):
+            self.calls += 1
+            return {'notes': source}
+    provider = Stubborn()
+    with pytest.raises(processor.ProcessingError, match='Saved progress is retained'):
+        processor._compress_notes(provider, 'TEST ONLY evidence. ' * 200)
+    assert provider.calls == 4
+
+
+def test_internal_compression_does_not_receive_article_writing_prompt(monkeypatch):
+    monkeypatch.setenv('AI_ENABLED','true'); monkeypatch.setenv('LLM_MODEL','test-model'); monkeypatch.setenv('LLM_API_KEY','test-only')
+    seen=[]
+    class Reply:
+        status_code=200
+        def raise_for_status(self): pass
+        def json(self): return {'choices':[{'finish_reason':'stop','message':{'content':'{"notes":"Dismissed; exception retained, p12"}'}}]}
+    class Client:
+        def __init__(self,**kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def post(self,*args,**kwargs): seen.append(kwargs['json']); return Reply()
+    monkeypatch.setattr(processor.httpx,'Client',Client)
+    processor._compress_notes(processor.Provider(), 'TEST ONLY holding and exception p12. '*100)
+    prompt=seen[0]['messages'][0]['content']
+    assert '250–400 words' not in prompt
+    assert 'Do not write an article' in prompt
+    assert seen[0]['response_format'] == {'type':'json_object'}
+
+
+def test_real_provider_compression_retries_oversized_and_wrong_shape(monkeypatch):
+    monkeypatch.setenv('AI_ENABLED','true'); monkeypatch.setenv('LLM_MODEL','test-model'); monkeypatch.setenv('LLM_API_KEY','test-only')
+    source='TEST ONLY supported outcome and qualifications p12. '*100
+    outputs=[{'notes':source}, {'articleBody':'Wrong task'}, {'notes':'Dismissed with exception, p12'}]
+    seen=[]
+    class Reply:
+        status_code=200
+        def raise_for_status(self): pass
+        def json(self): return {'choices':[{'finish_reason':'stop','message':{'content':json.dumps(outputs[len(seen)-1])}}]}
+    class Client:
+        def __init__(self,**kwargs): pass
+        def __enter__(self): return self
+        def __exit__(self,*args): pass
+        def post(self,*args,**kwargs): seen.append(kwargs['json']); return Reply()
+    monkeypatch.setattr(processor.httpx,'Client',Client)
+    result=processor._compress_notes(processor.Provider(), source)
+    assert len(seen)==3 and 'p12' in result
+    assert all(request['response_format']=={'type':'json_object'} for request in seen)
+    assert all(source in request['messages'][1]['content'] for request in seen)

@@ -1,3 +1,4 @@
+import { powerAuth, powerEnabled, powerLock, powerState } from "./lib/worker-power";
 import {
   credentialColumns,
   credentialInput,
@@ -807,9 +808,25 @@ export function registerEditorial(strapi: Core.Strapi) {
   strapi.server.routes({
     type: "content-api",
     routes: [
+      {
+        method: "POST",
+        path: "/worker/power",
+        config: { auth: false },
+        handler: async (ctx: any) => {
+          powerAuth(ctx);
+          const action = ctx.request.body?.action;
+          if (!["inspect", "drain", "resume"].includes(action)) bad("Invalid worker power action.");
+          ctx.body = { data: await powerState(db, action) };
+        },
+      },
       worker("POST", "/claim", async (ctx) => {
         let job: any = null;
         await db.transaction(async (trx: any) => {
+          if (powerEnabled()) {
+            await powerLock(trx);
+            const power = await trx("worker_power_state").where({ id: 1 }).first();
+            if (!power || power.mode !== "active") return;
+          }
           await trx("processing_jobs")
             .where("state", "running")
             .where("lease_until", "<", new Date())

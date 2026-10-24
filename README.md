@@ -40,3 +40,7 @@ For a separate hosted worker, use this repository root as build context and proc
 ## Saved progress and AI-provider management
 
 See `DEPLOY-RESUMABLE-AI.md` for the coordinated CMS/editorial/worker upgrade. Super administrators can add multiple encrypted keys per provider at /editorial/settings. Long jobs save analysis and automatically resume after quota waits. The worker must be updated once before web-managed keys take effect.
+
+## On-demand AWS worker
+
+See [aws/on-demand/README.md](aws/on-demand/README.md) for the tested controller that starts the existing EC2 worker for due jobs and stops it after ten idle minutes. It is disabled by default and requires a CMS redeploy plus one CloudFormation stack. No worker archive update is required.

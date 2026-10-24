@@ -1,0 +1,185 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "CourtroomDigest on-demand controller for an EXISTING EC2 worker. Does not create or terminate instances.",
+  "Parameters": {
+    "InstanceId": {
+      "Type": "String",
+      "AllowedPattern": "i-[a-f0-9]{8,17}",
+      "Description": "Existing courtbrief-worker EC2 instance ID"
+    },
+    "CmsUrl": {
+      "Type": "String",
+      "AllowedPattern": "https://[a-zA-Z0-9.-]+",
+      "Description": "CMS HTTPS origin, without trailing slash"
+    },
+    "PowerToken": {
+      "Type": "String",
+      "NoEcho": true,
+      "MinLength": 32,
+      "AllowedPattern": "[A-Za-z0-9_-]{32,128}",
+      "Description": "New dedicated controller token, same as Render WORKER_POWER_TOKEN"
+    }
+  },
+  "Resources": {
+    "ControllerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": "OnlyManageExistingWorker",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "ec2:StartInstances",
+                    "ec2:StopInstances"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:ec2:${AWS::Region}:${AWS::AccountId}:instance/${InstanceId}"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": "ec2:DescribeInstances",
+                  "Resource": "*"
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "ControllerLog",
+                      "Arn"
+                    ]
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "ControllerLog": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": {
+          "Fn::Sub": "/aws/lambda/${AWS::StackName}-controller"
+        },
+        "RetentionInDays": 7
+      }
+    },
+    "Controller": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": {
+          "Fn::Sub": "${AWS::StackName}-controller"
+        },
+        "Runtime": "python3.12",
+        "Handler": "index.handler",
+        "Timeout": 150,
+        "MemorySize": 128,
+        "ReservedConcurrentExecutions": 1,
+        "Role": {
+          "Fn::GetAtt": [
+            "ControllerRole",
+            "Arn"
+          ]
+        },
+        "Environment": {
+          "Variables": {
+            "INSTANCE_ID": {
+              "Ref": "InstanceId"
+            },
+            "CMS_URL": {
+              "Ref": "CmsUrl"
+            },
+            "POWER_TOKEN": {
+              "Ref": "PowerToken"
+            }
+          }
+        },
+        "Code": {
+          "ZipFile": "\"\"\"Scheduled Lambda: start for due work, drain safely, stop after an idle grace period.\nNo public endpoint, no IAM credentials on Render, and no access to document contents.\n\"\"\"\nimport json\nimport os\nimport urllib.request\nimport urllib.parse\nimport boto3\n\ndef cms(action):\n    base = os.environ['CMS_URL'].rstrip('/')\n    url = urllib.parse.urlparse(base)\n    if url.scheme != 'https' or url.username or url.password or url.path not in ('', '/'):\n        raise ValueError('CMS_URL must be an HTTPS origin.')\n    request = urllib.request.Request(base + '/api/worker/power',\n        data=json.dumps({'action': action}).encode(), method='POST',\n        headers={'Authorization': 'Bearer ' + os.environ['POWER_TOKEN'], 'Content-Type': 'application/json'})\n    # Never forward the controller token to a redirect target.\n    class NoRedirect(urllib.request.HTTPRedirectHandler):\n        def redirect_request(self, *args, **kwargs):\n            return None\n    with urllib.request.build_opener(NoRedirect()).open(request, timeout=45) as response:\n        data = json.load(response)['data']\n    if not isinstance(data.get('busy'), bool) or data.get('mode') not in ('active','draining') or not isinstance(data.get('canStop'), bool):\n        raise ValueError('Invalid CMS power response; no EC2 action taken.')\n    return data\n\ndef handler(event, context):\n    ec2 = boto3.client('ec2')\n    instance = os.environ['INSTANCE_ID']\n    response = ec2.describe_instances(InstanceIds=[instance])\n    state = response['Reservations'][0]['Instances'][0]['State']['Name']\n    if state in ('pending','stopping'):\n        return {'action':'transitioning'}\n    if state not in ('running','stopped'):\n        return {'action':'unsupported-instance-state'}\n    # Any CMS/network/auth failure raises before stopping the instance.\n    work = cms('inspect')\n    if work['busy']:\n        cms('resume')\n        if state == 'stopped':\n            ec2.start_instances(InstanceIds=[instance])\n            print(json.dumps({'workerPower':'started-for-work'}))\n            return {'action':'started-for-work'}\n        return {'action':'processing'}\n    if state == 'stopped':\n        return {'action':'sleeping'}\n    work = cms('drain')  # Atomic recheck + block new claims under the same DB lock.\n    if work['canStop'] and not work['busy'] and work['mode'] == 'draining':\n        ec2.stop_instances(InstanceIds=[instance])\n        print(json.dumps({'workerPower':'stopped-after-idle'}))\n        return {'action':'stopped-idle-worker'}\n    return {'action':'idle-grace-period'}\n"
+        }
+      }
+    },
+    "CheckSchedule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "ScheduleExpression": "rate(1 minute)",
+        "State": "ENABLED",
+        "Targets": [
+          {
+            "Arn": {
+              "Fn::GetAtt": [
+                "Controller",
+                "Arn"
+              ]
+            },
+            "Id": "worker-controller",
+            "RetryPolicy": {
+              "MaximumEventAgeInSeconds": 60,
+              "MaximumRetryAttempts": 0
+            }
+          }
+        ]
+      }
+    },
+    "SchedulePermission": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": {
+          "Ref": "Controller"
+        },
+        "Principal": "events.amazonaws.com",
+        "SourceArn": {
+          "Fn::GetAtt": [
+            "CheckSchedule",
+            "Arn"
+          ]
+        }
+      }
+    },
+    "ControllerAsyncPolicy": {
+      "Type": "AWS::Lambda::EventInvokeConfig",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "Controller"
+        },
+        "Qualifier": "$LATEST",
+        "MaximumEventAgeInSeconds": 60,
+        "MaximumRetryAttempts": 0
+      }
+    }
+  },
+  "Outputs": {
+    "ControllerFunction": {
+      "Value": {
+        "Ref": "Controller"
+      }
+    },
+    "ScheduleRule": {
+      "Value": {
+        "Ref": "CheckSchedule"
+      }
+    }
+  }
+}

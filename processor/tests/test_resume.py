@@ -23,6 +23,7 @@ class CountingProvider:
             CountingProvider.block_once=False
             raise processor.RateLimitWait(600)
         self.input_tokens+=10; self.output_tokens+=2
+        if task.startswith('Compress these internal'): return {'notes':'TEST ONLY compact holding p1; exceptions retained'}
         if schema: return draft()
         if task.startswith('Check'): return {'warnings':[]}
         return {'verifiedFacts':['TEST ONLY compact source notes'], 'pageReferences':[]}
